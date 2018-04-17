@@ -1,3 +1,8 @@
+# Add by Shi Wenqi
+# Add function: train_batch(ssd_net, epoch_num, rank_filters)
+#               go through epoch_num epoch
+#               forward(), backward() to rank
+
 from data import *
 from utils.augmentations import SSDAugmentation
 from layers.modules import MultiBoxLoss
@@ -14,6 +19,7 @@ import torch.nn.init as init
 import torch.utils.data as data
 import numpy as np
 import argparse
+import os.path as osp
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
@@ -67,6 +73,146 @@ else:
 
 if not os.path.exists(args.save_folder):
     os.mkdir(args.save_folder)
+
+# "train_epoch" in "pytorch.pruning"
+# net: SSD model
+# currently only support VOC dataset
+
+
+def train_epoch(ssd_net,
+                epoch_num=1,
+                rank_filters=False):
+
+    if args.dataset == 'VOC':
+        # if args.dataset_root == COCO_ROOT:
+        #     parser.error('Must specify dataset if specifying dataset_root')
+        cfg = voc
+        dataset = VOCDetection(root=args.dataset_root,
+                               transform=SSDAugmentation(cfg['min_dim'],
+                                                         MEANS))
+
+    if args.visdom:
+        import visdom
+        viz = visdom.Visdom()
+
+    net = ssd_net
+
+    if args.cuda:
+        net = torch.nn.DataParallel(ssd_net)
+        cudnn.benchmark = True
+
+    '''
+    if args.resume:
+        print('Resuming training, loading {}...'.format(args.resume))
+        ssd_net.load_weights(args.resume)
+    else:
+        vgg_weights = torch.load(args.save_folder + args.basenet)
+        print('Loading base network...')
+        ssd_net.vgg.load_state_dict(vgg_weights)
+    '''
+
+    if args.cuda:
+        net = net.cuda()
+
+    '''
+    if not args.resume:
+        print('Initializing weights...')
+        # initialize newly added layers' weights with xavier method
+        ssd_net.extras.apply(weights_init)
+        ssd_net.loc.apply(weights_init)
+        ssd_net.conf.apply(weights_init)
+    '''
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=args.momentum,
+                          weight_decay=args.weight_decay)
+    criterion = MultiBoxLoss(cfg['num_classes'], 0.5, True, 0, True, 3, 0.5,
+                             False, args.cuda)
+
+    net.train()
+    # loss counters
+    loc_loss = 0
+    conf_loss = 0
+    epoch = 0
+    print('Loading the dataset...')
+
+    epoch_size = len(dataset) // args.batch_size
+    print('Training SSD on:', dataset.name)
+    print('Using the specified args:')
+    print(args)
+
+    step_index = 0
+
+    if args.visdom:
+        vis_title = 'SSD.PyTorch on ' + dataset.name
+        vis_legend = ['Loc Loss', 'Conf Loss', 'Total Loss']
+        iter_plot = create_vis_plot('Iteration', 'Loss', vis_title, vis_legend)
+        epoch_plot = create_vis_plot('Epoch', 'Loss', vis_title, vis_legend)
+
+    data_loader = data.DataLoader(dataset, args.batch_size,
+                                  num_workers=args.num_workers,
+                                  shuffle=True, collate_fn=detection_collate,
+                                  pin_memory=True)
+    # create batch iterator
+    batch_iterator = iter(data_loader)
+    for iteration in range(epoch_size * epoch_num):
+        if args.visdom and iteration != 0 and (iteration % epoch_size == 0):
+            update_vis_plot(epoch, loc_loss, conf_loss, epoch_plot, None,
+                            'append', epoch_size)
+            # reset epoch loss counters
+            loc_loss = 0
+            conf_loss = 0
+            epoch += 1
+
+        if iteration in cfg['lr_steps'] and not rank_filters:
+            step_index += 1
+            adjust_learning_rate(optimizer, args.gamma, step_index)
+
+        # load train data
+        try:
+            images, targets = next(batch_iterator)
+        except StopIteration:
+            batch_iterator = iter(data_loader)
+            images, targets = next(batch_iterator)
+
+        if args.cuda:
+            images = Variable(images.cuda())
+            targets = [Variable(ann.cuda(), volatile=True) for ann in targets]
+        else:
+            images = Variable(images)
+            targets = [Variable(ann, volatile=True) for ann in targets]
+        # forward
+        t0 = time.time()
+        out = net(images)
+        # backprop
+        optimizer.zero_grad()
+        loss_l, loss_c = criterion(out, targets)
+        loss = loss_l + loss_c
+        loss.backward()
+
+        if not rank_filters:
+            optimizer.step()
+
+        t1 = time.time()
+        loc_loss += loss_l.data[0]
+        conf_loss += loss_c.data[0]
+
+        if iteration % 10 == 0:
+            print('timer: %.4f sec.' % (t1 - t0))
+            print('iter ' + repr(iteration) + ' || Loss: %.4f ||' % (loss.data[0]), end=' ')
+
+        if args.visdom:
+            update_vis_plot(iteration, loss_l.data[0], loss_c.data[0],
+                            iter_plot, epoch_plot, 'append')
+
+        if iteration != 0 and iteration % 5000 == 0 and not rank_filters:
+            print('Saving state, iter:', iteration)
+            torch.save(ssd_net.state_dict(), 'weights/ssd300_' + args.dataset + '_' +
+                       repr(iteration) + '.pth')
+
+    '''
+    torch.save(ssd_net.state_dict(),
+               args.save_folder + '' + args.dataset + '.pth')
+               
+    '''
 
 
 def train():
@@ -257,4 +403,7 @@ def update_vis_plot(iteration, loc, conf, window1, window2, update_type,
 
 
 if __name__ == '__main__':
-    train()
+    #train()
+    cfg = voc
+    ssd_net = build_ssd('train', cfg['min_dim'], cfg['num_classes'])
+    train_epoch(ssd_net, epoch_num=2, rank_filters=False)

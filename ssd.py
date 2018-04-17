@@ -71,49 +71,28 @@ class SSD(nn.Module):
         loc = list()
         conf = list()
 
-        t0 = time.time()
-
         # apply vgg up to conv4_3 relu
         for k in range(23):
             x = self.vgg[k](x)
-            print(x.shape)
-            t1 = time.time()
-            print(t1 - t0)
 
         s = self.L2Norm(x)
         sources.append(s)
 
-        print('vgg up to conv4_3')
-
         # apply vgg up to fc7
         for k in range(23, len(self.vgg)):
             x = self.vgg[k](x)
-            print(x.shape)
-            t1 = time.time()
-            print(t1 - t0)
         sources.append(x)
-
-        print('vgg up to fc7')
 
         # apply extra layers and cache source layer outputs
         for k, v in enumerate(self.extras):
             x = F.relu(v(x), inplace=True)
-            print(x.shape)
-            t1 = time.time()
-            print(t1 - t0)
             if k % 2 == 1:
                 sources.append(x)
-
-        print('up to extra conv source6')
 
         # apply multibox head to source layers
         for (x, l, c) in zip(sources, self.loc, self.conf):
             loc.append(l(x).permute(0, 2, 3, 1).contiguous())
             conf.append(c(x).permute(0, 2, 3, 1).contiguous())
-            t1 = time.time()
-            print(t1 - t0)
-
-        print('up to multibox regression for source6')
 
         loc = torch.cat([o.view(o.size(0), -1) for o in loc], 1)
         conf = torch.cat([o.view(o.size(0), -1) for o in conf], 1)
@@ -142,6 +121,19 @@ class SSD(nn.Module):
         else:
             print('Sorry only .pth and .pkl files supported.')
 
+    def total_num_filters(self):
+        filters_vgg = 0
+        filters_extras = 0
+        for name, module in list(self.vgg._modules.items()):
+            if isinstance(module, torch.nn.modules.conv.Conv2d):
+                filters_vgg = filters_vgg + module.out_channels
+        for name, module in list(self.extras._modules.items()):
+            if isinstance(module, torch.nn.modules.conv.Conv2d):
+                filters_extras = filters_extras + module.out_channels
+
+        print(filters_vgg)
+        print(filters_extras)
+        return filters_vgg + filters_extras
 
 # This function is derived from torchvision VGG make_layers()
 # https://github.com/pytorch/vision/blob/master/torchvision/models/vgg.py
