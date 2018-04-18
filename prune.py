@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
-from data import VOC_ROOT, VOCAnnotationTransform, VOCDetection, BaseTransform
+from data import *
 from data import VOC_CLASSES as labelmap
 import torch.utils.data as data
 
@@ -82,12 +82,12 @@ set_type = 'test'
 def get_candidates_to_prune(num_filters_to_prune, net):
 
     # "self.prunner.reset()"
-    net.prunner_reset()
+    net.reset()
 
-    train_epoch(net, rank_filters=True)
+    train_epoch(net, epoch_num=1, rank_filters=True)
 
     # "self.prunner.normalize_ranks_per_layer()"
-    net.prunner_normalize_ranks_per_layer()
+    net.normalize_ranks_per_layer()
 
     prune_targets = net.get_prunning_plan(num_filters_to_prune)
 
@@ -98,10 +98,12 @@ def get_candidates_to_prune(num_filters_to_prune, net):
 def prune(net, args):
     # get the accuracy before prunning
 
+    '''
     test_net(args.save_folder, net, args.cuda, dataset,
              BaseTransform(net.size, dataset_mean), args.top_k, 300,
              thresh=args.confidence_threshold)
 
+    '''
     # “self.model.train()” ??
 
     number_of_filters = net.total_num_filters()
@@ -112,9 +114,12 @@ def prune(net, args):
     print(("Number of prunning iterations to reduce 67% filters", iterations))
 
     # structure of "prune_targets"?
+    iterations = 1
     for _ in range(iterations):
         print("Ranking filters..")
         prune_targets = get_candidates_to_prune(num_filters_to_prune_per_iteration, net)
+
+        '''
         layers_prunned = {}
         for layer_index, filter_index in prune_targets:
             if layer_index not in layers_prunned:
@@ -135,27 +140,22 @@ def prune(net, args):
         print("Fine tuning to recover from prunning iteration.")
         net = train_epoch(net, epoch_num=10, rank_filters=False)
 
+
     print("Finished. Going to fine tune the model a bit more")
     net = train_epoch(net, epoch_num=15, rank_filters=False)
     torch.save(net, "model prunned")
 
-
-
+'''
 
 
 if __name__ == '__main__':
-    # load net
-    num_classes = len(labelmap) + 1  # +1 for background
-    net = build_ssd('test', 300, num_classes)  # initialize SSD
-    net.load_state_dict(torch.load(args.trained_model))
-    net.eval()
-    print('Finished loading model!')
-    # load data
-    dataset = VOCDetection(args.voc_root, [('2007', set_type)],
-                           BaseTransform(300, dataset_mean),
-                           VOCAnnotationTransform())
+    cfg = voc
+    ssd_net = build_ssd('train', cfg['min_dim'], cfg['num_classes'])
+    net = ssd_net
+
+    ssd_net.load_weights(args.trained_model)
+
     if args.cuda:
         net = net.cuda()
-        cudnn.benchmark = True
 
     prune(net, args)

@@ -6,6 +6,9 @@ from layers import *
 from data import voc, coco
 import os
 import time
+from operator import itemgetter
+from heapq import nsmallest
+import numpy as np
 
 
 class SSD(nn.Module):
@@ -17,9 +20,8 @@ class SSD(nn.Module):
         3) associated priorbox layer to produce default bounding
            boxes specific to the layer's feature map size.
     See: https://arxiv.org/pdf/1512.02325.pdf for more details.
-
     Args:
-        phase: (string) Can be "test" or "train"
+        phase: (string) Can be "test" or "train" or "prune"
         size: input image size
         base: VGG16 layers for input, size of either 300 or 500
         extras: extra layers that feed to multibox loc and conf layers
@@ -47,52 +49,113 @@ class SSD(nn.Module):
         if phase == 'test':
             self.softmax = nn.Softmax(dim=-1)
             self.detect = Detect(num_classes, 0, 200, 0.01, 0.45)
+        # only go through the detect module when testing, otherwise, return a full length tensor rather than top_k
+        self.reset()
+
+    def reset(self):
+        # self.activations = []
+        # self.gradients = []
+        # self.grad_index = 0
+        # self.activation_to_layer = {}
+        self.filter_ranks = {}
 
     def forward(self, x):
         """Applies network layers and ops on input image(s) x.
-
         Args:
             x: input image or batch of images. Shape: [batch,3,300,300].
-
         Return:
             Depending on phase:
             test:
                 Variable(tensor) of output class label predictions,
                 confidence score, and corresponding location predictions for
                 each object detected. Shape: [batch,topk,7]
-
             train:
                 list of concat outputs from:
                     1: confidence layers, Shape: [batch*num_priors,num_classes]
                     2: localization layers, Shape: [batch,num_priors*4]
                     3: priorbox layers, Shape: [2,num_priors*4]
+            prune:
+                list of concat outputs from:
+                    1: confidence layers, Shape: [batch*num_priors,num_classes]
+                    2: localization layers, Shape: [batch,num_priors*4]
+                    3: priorbox layers, Shape: [2,num_priors*4]
+                plus:
+                    add a hook for rank computing when the grad is done
+                    record activation value for computing rank = acti * grad
         """
         sources = list()
         loc = list()
         conf = list()
 
+        self.activations = []
+        self.gradients = []
+        self.grad_index = 0
+        self.activation_to_layer = {}
+
+        activation_index = 0
+
+        t0 = time.time()
+
         # apply vgg up to conv4_3 relu
         for k in range(23):
-            x = self.vgg[k](x)
+            module = self.vgg[k]
+            x = module(x)
+            if isinstance(module, torch.nn.modules.conv.Conv2d):  #  and self.phase == "prune"
+                x.register_hook(self.compute_rank)
+                self.activations.append(x)
+                self.activation_to_layer[activation_index] = k
+                activation_index += 1
+            # print(x.shape)
+            # t1 = time.time()
+            # print(t1 - t0)
 
         s = self.L2Norm(x)
         sources.append(s)
 
+        # print('vgg up to conv4_3')
+
         # apply vgg up to fc7
         for k in range(23, len(self.vgg)):
-            x = self.vgg[k](x)
+            module = self.vgg[k]
+            x = module(x)
+            if isinstance(module, torch.nn.modules.conv.Conv2d):
+                x.register_hook(self.compute_rank)
+                self.activations.append(x)
+                self.activation_to_layer[activation_index] = k
+                activation_index += 1
+            # print(x.shape)
+            # t1 = time.time()
+            # print(t1 - t0)
         sources.append(x)
+
+        # print('vgg up to fc7')
 
         # apply extra layers and cache source layer outputs
         for k, v in enumerate(self.extras):
-            x = F.relu(v(x), inplace=True)
+            # x = F.relu(v(x), inplace=True)
+            x = v(x)
+            if isinstance(v, torch.nn.modules.conv.Conv2d):
+                x.register_hook(self.compute_rank)
+                self.activations.append(x)
+                self.activation_to_layer[activation_index] = k + len(self.vgg)
+                activation_index += 1
+            x = F.relu(x, inplace=True)
+            # print(x.shape)
+            # t1 = time.time()
+            # print(t1 - t0)
             if k % 2 == 1:
                 sources.append(x)
+
+        # print('up to extra conv source6')
 
         # apply multibox head to source layers
         for (x, l, c) in zip(sources, self.loc, self.conf):
             loc.append(l(x).permute(0, 2, 3, 1).contiguous())
             conf.append(c(x).permute(0, 2, 3, 1).contiguous())
+            # t1 = time.time()
+            # print(t1 - t0)
+
+        # print('up to multibox regression for source6')
 
         loc = torch.cat([o.view(o.size(0), -1) for o in loc], 1)
         conf = torch.cat([o.view(o.size(0), -1) for o in conf], 1)
@@ -110,6 +173,65 @@ class SSD(nn.Module):
                 self.priors
             )
         return output
+
+    def compute_rank(self, grad):
+        activation_index = len(self.activations) - self.grad_index - 1
+        activation = self.activations[activation_index]
+        values = \
+            torch.sum((activation * grad), dim=0, keepdim=True). \
+                sum(dim=2, keepdim=True).sum(dim=3, keepdim=True)[0, :, 0,
+            0].data  # compute the total 1st order taylor for each filters in a given layer
+
+        # Normalize the rank by the filter dimensions
+        values = \
+            values / (activation.size(0) * activation.size(2) * activation.size(3))
+
+        if activation_index not in self.filter_ranks:  # set self.filter_ranks[activation_index]
+            self.filter_ranks[activation_index] = \
+                torch.FloatTensor(activation.size(1)).zero_().cuda()
+
+        self.filter_ranks[activation_index] += values
+        self.grad_index += 1
+
+    def lowest_ranking_filters(self, num):
+        data = []
+        for i in sorted(self.filter_ranks.keys()):
+            for j in range(self.filter_ranks[i].size(0)):
+                data.append((self.activation_to_layer[i], j, self.filter_ranks[i][j]))
+
+        return nsmallest(num, data, itemgetter(2))  # find the minimum of data[_][2], aka, self.filter_ranks[i][j]
+
+    def normalize_ranks_per_layer(self):
+        for i in self.filter_ranks:
+            v = torch.abs(self.filter_ranks[i])
+            v = v / np.sqrt(torch.sum(v * v))
+            self.filter_ranks[i] = v.cpu()
+
+    def get_prunning_plan(self, num_filters_to_prune):
+        filters_to_prune = self.lowest_ranking_filters(num_filters_to_prune)
+
+        # After each of the k filters are prunned,
+        # the filter index of the next filters change since the model is smaller.
+        filters_to_prune_per_layer = {}
+        for (l, f, _) in filters_to_prune:
+            if l not in filters_to_prune_per_layer:
+                filters_to_prune_per_layer[l] = []
+            filters_to_prune_per_layer[l].append(f)
+
+        for l in filters_to_prune_per_layer:
+            filters_to_prune_per_layer[l] = sorted(filters_to_prune_per_layer[l])
+            for i in range(len(filters_to_prune_per_layer[l])):
+                filters_to_prune_per_layer[l][i] = filters_to_prune_per_layer[l][i] - i
+
+        filters_to_prune = []
+        for l in filters_to_prune_per_layer:
+            for i in filters_to_prune_per_layer[l]:
+                filters_to_prune.append((l, i))
+
+        print(filters_to_prune)
+
+        return filters_to_prune
+
 
     def load_weights(self, base_file):
         other, ext = os.path.splitext(base_file)
@@ -134,6 +256,7 @@ class SSD(nn.Module):
         print(filters_vgg)
         print(filters_extras)
         return filters_vgg + filters_extras
+
 
 # This function is derived from torchvision VGG make_layers()
 # https://github.com/pytorch/vision/blob/master/torchvision/models/vgg.py

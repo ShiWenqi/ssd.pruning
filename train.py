@@ -43,7 +43,7 @@ parser.add_argument('--resume', default='./weights/ssd300_VOC_10000.pth', type=s
                     help='Checkpoint state_dict file to resume training from')
 parser.add_argument('--start_iter', default=10000, type=int,
                     help='Resume training at this iter')
-parser.add_argument('--num_workers', default=4, type=int,
+parser.add_argument('--num_workers', default=1, type=int,
                     help='Number of workers used in dataloading')
 parser.add_argument('--cuda', default=True, type=str2bool,
                     help='Use CUDA to train model')
@@ -79,7 +79,7 @@ if not os.path.exists(args.save_folder):
 # currently only support VOC dataset
 
 
-def train_epoch(ssd_net,
+def train_epoch(net,
                 epoch_num=1,
                 rank_filters=False):
 
@@ -91,16 +91,8 @@ def train_epoch(ssd_net,
                                transform=SSDAugmentation(cfg['min_dim'],
                                                          MEANS))
 
-    if args.visdom:
-        import visdom
-        viz = visdom.Visdom()
-
-    net = ssd_net
-
-    if args.cuda:
-        net = torch.nn.DataParallel(ssd_net)
-        cudnn.benchmark = True
-
+    # ssd_net = build_ssd('train', cfg['min_dim'], cfg['num_classes'])
+    # net = ssd_net
     '''
     if args.resume:
         print('Resuming training, loading {}...'.format(args.resume))
@@ -108,19 +100,7 @@ def train_epoch(ssd_net,
     else:
         vgg_weights = torch.load(args.save_folder + args.basenet)
         print('Loading base network...')
-        ssd_net.vgg.load_state_dict(vgg_weights)
-    '''
-
-    if args.cuda:
-        net = net.cuda()
-
-    '''
-    if not args.resume:
-        print('Initializing weights...')
-        # initialize newly added layers' weights with xavier method
-        ssd_net.extras.apply(weights_init)
-        ssd_net.loc.apply(weights_init)
-        ssd_net.conf.apply(weights_init)
+        ssd_net.vgg.load_state_dict(vgg_weights)       
     '''
     optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=args.momentum,
                           weight_decay=args.weight_decay)
@@ -141,12 +121,6 @@ def train_epoch(ssd_net,
 
     step_index = 0
 
-    if args.visdom:
-        vis_title = 'SSD.PyTorch on ' + dataset.name
-        vis_legend = ['Loc Loss', 'Conf Loss', 'Total Loss']
-        iter_plot = create_vis_plot('Iteration', 'Loss', vis_title, vis_legend)
-        epoch_plot = create_vis_plot('Epoch', 'Loss', vis_title, vis_legend)
-
     data_loader = data.DataLoader(dataset, args.batch_size,
                                   num_workers=args.num_workers,
                                   shuffle=True, collate_fn=detection_collate,
@@ -154,13 +128,6 @@ def train_epoch(ssd_net,
     # create batch iterator
     batch_iterator = iter(data_loader)
     for iteration in range(epoch_size * epoch_num):
-        if args.visdom and iteration != 0 and (iteration % epoch_size == 0):
-            update_vis_plot(epoch, loc_loss, conf_loss, epoch_plot, None,
-                            'append', epoch_size)
-            # reset epoch loss counters
-            loc_loss = 0
-            conf_loss = 0
-            epoch += 1
 
         if iteration in cfg['lr_steps'] and not rank_filters:
             step_index += 1
@@ -198,10 +165,6 @@ def train_epoch(ssd_net,
         if iteration % 10 == 0:
             print('timer: %.4f sec.' % (t1 - t0))
             print('iter ' + repr(iteration) + ' || Loss: %.4f ||' % (loss.data[0]), end=' ')
-
-        if args.visdom:
-            update_vis_plot(iteration, loss_l.data[0], loss_c.data[0],
-                            iter_plot, epoch_plot, 'append')
 
         if iteration != 0 and iteration % 5000 == 0 and not rank_filters:
             print('Saving state, iter:', iteration)
@@ -404,6 +367,31 @@ def update_vis_plot(iteration, loc, conf, window1, window2, update_type,
 
 if __name__ == '__main__':
     #train()
+
     cfg = voc
     ssd_net = build_ssd('train', cfg['min_dim'], cfg['num_classes'])
-    train_epoch(ssd_net, epoch_num=2, rank_filters=False)
+    net = ssd_net
+
+    if args.cuda:
+        net = torch.nn.DataParallel(ssd_net)
+        cudnn.benchmark = True
+
+    if args.resume:
+        print('Resuming training, loading {}...'.format(args.resume))
+        ssd_net.load_weights(args.resume)
+    else:
+        vgg_weights = torch.load(args.save_folder + args.basenet)
+        print('Loading base network...')
+        ssd_net.vgg.load_state_dict(vgg_weights)
+
+    if args.cuda:
+        net = net.cuda()
+
+    if not args.resume:
+        print('Initializing weights...')
+        # initialize newly added layers' weights with xavier method
+        ssd_net.extras.apply(weights_init)
+        ssd_net.loc.apply(weights_init)
+        ssd_net.conf.apply(weights_init)
+
+    train_epoch(net, epoch_num=2, rank_filters=True)
