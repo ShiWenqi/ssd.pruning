@@ -119,7 +119,6 @@ def prune(net, args):
         print("Ranking filters..")
         prune_targets = get_candidates_to_prune(num_filters_to_prune_per_iteration, net)
 
-        '''
         layers_prunned = {}
         for layer_index, filter_index in prune_targets:
             if layer_index not in layers_prunned:
@@ -129,6 +128,7 @@ def prune(net, args):
         print(("Layers that will be prunned", layers_prunned))
         print("Prunning filters..")
         net = net.cpu()
+        '''
         for layer_index, filter_index in prune_target:
             net = prune_conv_layer(net, layer_index, filter_index)
 
@@ -144,7 +144,6 @@ def prune(net, args):
     print("Finished. Going to fine tune the model a bit more")
     net = train_epoch(net, epoch_num=15, rank_filters=False)
     torch.save(net, "model prunned")
-
 '''
 
 
