@@ -228,6 +228,8 @@ class SSD(nn.Module):
             for i in filters_to_prune_per_layer[l]:
                 filters_to_prune.append((l, i))
 
+        print(filters_to_prune)
+
         return filters_to_prune
 
 
