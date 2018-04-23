@@ -415,6 +415,8 @@ def test_net(save_folder, net, cuda, dataset, transform, top_k,
     print('Evaluating detections')
     evaluate_detections(all_boxes, output_dir, dataset)
 
+    print('Average time: {:.3f}s'.format(_t['im_detect'].toc(average=True)))
+
 
 def evaluate_detections(box_list, output_dir, dataset):
     write_voc_results_file(box_list, dataset)
