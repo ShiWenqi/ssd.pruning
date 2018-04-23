@@ -52,7 +52,7 @@ def replace_layers(model, i, indexes, layers):
     return model[i]
 
 
-def prunning_filters(net, layer_index, filter_index):
+def prune_conv_layer(net, layer_index, filter_index):
     # Bool: is_layer_from_vgg
     # Bool: is_feature_layer
     # confirm the boundary conditions with Hou Yunzhong
@@ -277,15 +277,15 @@ if __name__ == '__main__':
     #filter_index = 222
 
     for i in range(300):
-        net = prunning_filters(net, layer_index, i)
+        net = prune_conv_layer(net, layer_index, i)
 
     layer_index = 33
     for i in range(300):
-        net = prunning_filters(net, layer_index, i)
+        net = prune_conv_layer(net, layer_index, i)
 
     layer_index = 40
     for i in range(100):
-        net = prunning_filters(net, layer_index, i)
+        net = prune_conv_layer(net, layer_index, i)
 
     print("The prunning took", time.time() - t0)
 

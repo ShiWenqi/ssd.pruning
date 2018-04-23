@@ -40,7 +40,12 @@ class SSD(nn.Module):
         # SSD network
         self.vgg = nn.ModuleList(base)
         # Layer learns to scale the l2 normalized features from conv4_3
-        self.L2Norm = L2Norm(512, 20)
+
+        # self.L2Norm = L2Norm(512, 20)
+        # for prunned conv layer 21
+        _, conv21 = list(self.vgg._modules.items())[21]
+        self.L2Norm = L2Norm(conv21.out_channels, 20)
+
         self.extras = nn.ModuleList(extras)
 
         self.loc = nn.ModuleList(head[0])

@@ -82,7 +82,6 @@ if not os.path.exists(args.save_folder):
 def train_epoch(net,
                 epoch_num=1,
                 rank_filters=False):
-
     if args.dataset == 'VOC':
         # if args.dataset_root == COCO_ROOT:
         #     parser.error('Must specify dataset if specifying dataset_root')
