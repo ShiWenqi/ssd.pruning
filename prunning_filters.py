@@ -19,7 +19,7 @@ import numpy as np
 import pickle
 import cv2
 
-os.environ['CUDA_VISIBLE_DEVICES']='2'
+os.environ['CUDA_VISIBLE_DEVICES']='1'
 
 def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
@@ -89,7 +89,7 @@ def prunning_filters(net, layer_index, filter_index):
                     break
                 offset = offset + 1
     else:
-        _, conv = list(model.extras._modules.items())[layer_index-index_bias]
+        _, conv = list(net.extras._modules.items())[layer_index-index_bias]
         next_conv = None
         offset = 1
         while layer_index - index_bias + offset < len(list(net.extras._modules.items())):
@@ -273,12 +273,19 @@ if __name__ == '__main__':
 
 
     t0 = time.time()
-    layer_index = 33
+    layer_index = 31
     #filter_index = 222
 
-    for i in range(30):
+    for i in range(300):
         net = prunning_filters(net, layer_index, i)
 
+    layer_index = 33
+    for i in range(300):
+        net = prunning_filters(net, layer_index, i)
+
+    layer_index = 40
+    for i in range(100):
+        net = prunning_filters(net, layer_index, i)
 
     print("The prunning took", time.time() - t0)
 
