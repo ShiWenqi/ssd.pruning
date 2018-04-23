@@ -23,8 +23,9 @@ import argparse
 import numpy as np
 import pickle
 import cv2
+from prunning_filters import prune_conv_layer
 
-os.environ['CUDA_VISIBLE_DEVICES']='2'
+os.environ['CUDA_VISIBLE_DEVICES']='1'
 
 if sys.version_info[0] == 2:
     import xml.etree.cElementTree as ET
@@ -96,16 +97,17 @@ def get_candidates_to_prune(num_filters_to_prune, net):
 
 
 def prune(net, args):
-    # get the accuracy before prunning
-
     '''
+    # get the accuracy before prunning
+    dataset = VOCDetection(args.voc_root, [('2007', set_type)],
+                           BaseTransform(300, dataset_mean),
+                           VOCAnnotationTransform())
+
     test_net(args.save_folder, net, args.cuda, dataset,
              BaseTransform(net.size, dataset_mean), args.top_k, 300,
              thresh=args.confidence_threshold)
-
     '''
     # “self.model.train()” ??
-
     number_of_filters = net.total_num_filters()
     num_filters_to_prune_per_iteration = 512
     iterations = int(float(number_of_filters) / num_filters_to_prune_per_iteration)
@@ -114,7 +116,6 @@ def prune(net, args):
     print(("Number of prunning iterations to reduce 67% filters", iterations))
 
     # structure of "prune_targets"?
-    iterations = 1
     for _ in range(iterations):
         print("Ranking filters..")
         prune_targets = get_candidates_to_prune(num_filters_to_prune_per_iteration, net)
@@ -128,23 +129,18 @@ def prune(net, args):
         print(("Layers that will be prunned", layers_prunned))
         print("Prunning filters..")
         net = net.cpu()
-        '''
-        for layer_index, filter_index in prune_target:
+
+        for layer_index, filter_index in prune_targets:
             net = prune_conv_layer(net, layer_index, filter_index)
-
         net = net.cuda()
-        message = ste(100*float(net.total_num_filters()) / number_of_filters) + "%"
+        message = str(100*float(net.total_num_filters()) / number_of_filters) + "%"
         print(("Filter prunned", str(message)))
-
         # "self.test()"???
         print("Fine tuning to recover from prunning iteration.")
         net = train_epoch(net, epoch_num=10, rank_filters=False)
-
-
     print("Finished. Going to fine tune the model a bit more")
     net = train_epoch(net, epoch_num=15, rank_filters=False)
     torch.save(net, "model prunned")
-'''
 
 
 if __name__ == '__main__':
@@ -152,7 +148,7 @@ if __name__ == '__main__':
     ssd_net = build_ssd('train', cfg['min_dim'], cfg['num_classes'])
     net = ssd_net
 
-    ssd_net.load_weights(args.trained_model)
+    net.load_weights(args.trained_model)
 
     if args.cuda:
         net = net.cuda()
