@@ -406,8 +406,7 @@ def test_net(save_folder, net, cuda, dataset, transform, top_k,
                                                                  copy=False)
             all_boxes[j][i] = cls_dets
 
-        print('im_detect: {:d}/{:d} {:.3f}s'.format(i + 1,
-                                                    num_images, detect_time))
+        #print('im_detect: {:d}/{:d} {:.3f}s'.format(i + 1, num_images, detect_time))
 
     with open(det_file, 'wb') as f:
         pickle.dump(all_boxes, f, pickle.HIGHEST_PROTOCOL)

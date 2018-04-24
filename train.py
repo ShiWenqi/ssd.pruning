@@ -175,6 +175,7 @@ def train_epoch(net,
                args.save_folder + '' + args.dataset + '.pth')
                
     '''
+    return net
 
 
 def train():

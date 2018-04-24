@@ -18,6 +18,7 @@ import argparse
 import numpy as np
 import pickle
 import cv2
+from layers import *
 
 os.environ['CUDA_VISIBLE_DEVICES']='1'
 
@@ -260,6 +261,9 @@ def prune_conv_layer(net, layer_index, filter_index):
                              [new_conv, next_new_conv]) for i, _ in enumerate(net.vgg)])
 
         '''
+        # adjust L2Norm parameter
+        _, conv21 = list(net.vgg._modules.items())[21]
+        net.L2Norm = L2Norm(conv21.out_channels, 20)
 
     return net
 

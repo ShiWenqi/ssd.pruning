@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
 from data import *
+from layers import *
 from data import VOC_CLASSES as labelmap
 import torch.utils.data as data
 
@@ -25,7 +26,7 @@ import pickle
 import cv2
 from prunning_filters import prune_conv_layer
 
-os.environ['CUDA_VISIBLE_DEVICES']='1'
+os.environ['CUDA_VISIBLE_DEVICES']='0'
 
 if sys.version_info[0] == 2:
     import xml.etree.cElementTree as ET
@@ -97,16 +98,15 @@ def get_candidates_to_prune(num_filters_to_prune, net):
 
 
 def prune(net, args):
-    '''
+
     # get the accuracy before prunning
     dataset = VOCDetection(args.voc_root, [('2007', set_type)],
                            BaseTransform(300, dataset_mean),
                            VOCAnnotationTransform())
 
-    test_net(args.save_folder, net, args.cuda, dataset,
-             BaseTransform(net.size, dataset_mean), args.top_k, 300,
-             thresh=args.confidence_threshold)
-    '''
+    net.softmax = nn.Softmax(dim=-1)
+    net.detect = Detect(21, 0, 200, 0.01, 0.45)
+
     # “self.model.train()” ??
     number_of_filters = net.total_num_filters()
     num_filters_to_prune_per_iteration = 512
@@ -117,6 +117,14 @@ def prune(net, args):
 
     # structure of "prune_targets"?
     for _ in range(iterations):
+        print("Testing SSD..")
+        net.phase = 'test'
+
+        test_net(args.save_folder, net, args.cuda, dataset,
+                 BaseTransform(net.size, dataset_mean), args.top_k, 300,
+                 thresh=args.confidence_threshold)
+
+        net.phase = 'train'
         print("Ranking filters..")
         prune_targets = get_candidates_to_prune(num_filters_to_prune_per_iteration, net)
 
@@ -137,7 +145,9 @@ def prune(net, args):
         print(("Filter prunned", str(message)))
         # "self.test()"???
         print("Fine tuning to recover from prunning iteration.")
-        net = train_epoch(net, epoch_num=10, rank_filters=False)
+        net.reset()
+        net = train_epoch(net, epoch_num=2, rank_filters=False)
+
     print("Finished. Going to fine tune the model a bit more")
     net = train_epoch(net, epoch_num=15, rank_filters=False)
     torch.save(net, "model prunned")
